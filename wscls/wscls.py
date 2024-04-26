@@ -30,6 +30,8 @@ from textual.screen import ModalScreen
 from textual import on
 from textual import work
 
+NUM_CUSTOM_COMMANDS = 10
+
 
 class ConfigurationAddGrid(Widget):
     DEFAULT_CSS = """
@@ -49,7 +51,7 @@ class MainGrid(Grid):
         width: 1fr;
         height: 1fr;
         layout: grid;
-        grid-rows: 3 1 60% 15%
+        grid-rows: 3 3 60% 15%
     }
     """
 
@@ -88,14 +90,19 @@ class State:
 
     @property
     def default_configuration(self):
-        return {
+        d = {
             'url': '',
             'headers': {},
-            'autoping': False,
+            'autoping': True,
             'text': '',
             'auto_reconnect': True,
             'ssl_check': True
         }
+        d.update({
+            f'custom{n}': ''
+            for n in range(NUM_CUSTOM_COMMANDS)
+        })
+        return d
 
     def get_configuration(self):
         try:
@@ -207,6 +214,21 @@ class AddHeaderMenuButton(Button):
         self.post_message(self.Message())
 
 
+class CustomInput(Input):
+    pass
+
+
+class SendCustomInput(Button):
+    async def on_button_pressed(self, *args, **kwargs):
+        custom_cmd_id = self.id.replace('send_custom_', 'custom')
+        text = self.app.state.get_value(f'{custom_cmd_id}')
+        text = text.replace('\\n', '\n')
+        if text:
+            textar = self.parent.parent.query_one(SendTextArea)
+            textar.clear()
+            textar.insert(text)
+            # self.parent.parent.query_one('#send_message').action_press()
+
 class SendTextArea(TextArea):
     def on_text_area_changed(self, event: Event):
         self.app.state.set_value('text', self.text)
@@ -299,6 +321,8 @@ class WsApp(App):
         self.query_one('#autoping').value = self.state.get_value('autoping')
         self.query_one('#auto_reconnect').value = self.state.get_value('auto_reconnect')
         self.query_one('#ssl_check').value = self.state.get_value('ssl_check')
+        for i in range(NUM_CUSTOM_COMMANDS):
+            self.query_one(f'#custom{i}').value = self.state.get_value(f'custom{i}')
         self.refresh_headers()
 
     @work
@@ -348,6 +372,9 @@ class WsApp(App):
 
     @on(Button.Pressed, '#send_message')
     async def send_message(self, message: Message):
+        await self._send_message_internal()
+
+    async def _send_message_internal(self):
         textar = self.query_one(SendTextArea)
         text = ''
         log = self.query_one('#ws_sessions_log')
@@ -375,7 +402,11 @@ class WsApp(App):
             del self.state.get_value('headers')[selected.id]
             self.refresh_headers()
 
-    @on(AddressInput.Submitted)
+    @on(CustomInput.Changed, '.custom')
+    def save_custom_state(self, message: Message):
+        self.state.set_value(message.input.id, message.value)
+
+    @on(AddressInput.Submitted, "#address")
     def submit_connect(self, message: Message):
         self.query_one('#connect').action_press()
 
@@ -437,6 +468,9 @@ class WsApp(App):
             HorizontalHAuto(
                 Button('Send', id='send_message'),
                 Button('Ping', id='ping')
+            ),
+            HorizontalHAuto(
+                *tuple(SendCustomInput(f'Custom {i}', id=f'send_custom_{i}') for i in range(NUM_CUSTOM_COMMANDS))
             )
         )
 
@@ -471,6 +505,11 @@ class WsApp(App):
             Button('Add config', id='add_configuration')
         )
 
+    def compose_custom_tab(self):
+        for i in range(NUM_CUSTOM_COMMANDS):
+            yield Label(f'Custom Command {i}')
+            yield CustomInput(self.state.get_value(f'custom{i}'), id=f"custom{i}")
+
     def set_status_text(self, text: str):
         self.query_one('#status').update(text)
 
@@ -481,6 +520,9 @@ class WsApp(App):
 
             with TabPane('Options', id='Options'):
                 yield from self.compse_options_tab()
+
+            with TabPane('Custom Commands', id='Custom'):
+                yield from self.compose_custom_tab()
         yield Footer()
 
 
